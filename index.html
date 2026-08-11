@@ -40,7 +40,6 @@
         line-height: 1.6;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
-        padding-bottom: 80px; 
       }
 
       h1 { font-size: 22px; line-height: 1.4; font-weight: 600; letter-spacing: -0.01em; color: var(--text-main); margin-bottom: var(--spacing-md); }
@@ -125,14 +124,18 @@
       #header-control-panel { display: flex; gap: var(--spacing-md); align-items: center; flex-wrap: wrap; }
       #project-select-wrapper { flex: 1; min-width: 280px; display: flex; align-items: center; gap: var(--spacing-sm); }
 
-      #bottom-nav {
-        position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); 
-        width: 100%; max-width: 800px; background: var(--bg-main); border-top: 1px solid var(--border-light);
-        display: flex; justify-content: space-around; padding-bottom: env(safe-area-inset-bottom, 0px); z-index: 900;
+      #top-nav {
+        display: flex; justify-content: flex-start; gap: 8px; flex-wrap: wrap; margin-bottom: 24px;
       }
-      .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px 0; background: none; border: none; color: var(--text-secondary); cursor: pointer; transition: color 0.2s ease; gap: 4px; font-size: 12px; }
-      .nav-item.active { color: var(--text-main); font-weight: 600; }
-      .nav-item i { width: 24px; height: 24px; }
+      .nav-item {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; 
+        background: #FFFFFF; border: 1px solid var(--border-light); border-radius: 8px; 
+        color: var(--text-secondary); cursor: pointer; transition: all 0.2s ease; font-weight: 500; font-size: 13px;
+      }
+      .nav-item.active {
+        background: #111111; color: #FFFFFF; border-color: #111111;
+      }
+      .nav-item i { width: 16px; height: 16px; }
 
       .view-section { display: none; animation: fadeIn 0.3s ease; }
       .view-section.active { display: block; }
@@ -165,6 +168,14 @@
     </header>
     
     <main id="app-content">
+      
+      <!-- 全新頂部頁籤切換 -->
+      <nav id="top-nav">
+        <button class="nav-item active" onclick="switchView('accordion', this)"><i data-lucide="list-todo"></i><span>專案手風琴</span></button>
+        <button class="nav-item" onclick="switchView('fishbone', this)"><i data-lucide="git-commit"></i><span>魚骨進度</span></button>
+        <button class="nav-item" onclick="switchView('email', this)"><i data-lucide="mail"></i><span>Email</span></button>
+      </nav>
+
       <div id="view-accordion" class="view-section active">
         <div style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 8px;">
           <div>
@@ -192,7 +203,10 @@
             <h2>魚骨進度追蹤圖</h2>
             <p class="caption">點擊節點查看細項任務與工時紀錄</p>
           </div>
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button id="btn-clear-schedule" class="btn-secondary" style="color: #ef4444; border-color: #ef4444;" onclick="handleClearScheduleClick()">
+              <i data-lucide="trash-2" style="width:16px; height:16px;"></i> 清除排程
+            </button>
             <button id="btn-refresh-schedule" class="btn-secondary" onclick="handleRefreshScheduleClick()">
               <i data-lucide="refresh-cw" style="width:16px; height:16px;"></i> 刷新排程
             </button>
@@ -267,12 +281,6 @@
       </div>
     </main>
     
-    <nav id="bottom-nav">
-      <button class="nav-item active" onclick="switchView('accordion', this)"><i data-lucide="list-todo"></i><span>專案手風琴</span></button>
-      <button class="nav-item" onclick="switchView('fishbone', this)"><i data-lucide="git-commit"></i><span>魚骨進度</span></button>
-      <button class="nav-item" onclick="switchView('email', this)"><i data-lucide="mail"></i><span>Email歸檔</span></button>
-    </nav>
-    
     <div id="history-popover" class="popover">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; border-bottom: 1px solid var(--border-light); padding-bottom: 8px;">
         <h3 style="margin:0; font-size: 14px;">歷史紀錄時間軸</h3>
@@ -333,7 +341,7 @@
 
       const apiClient = {
         call: async function(action, payload = {}) {
-          const mutativeActions = ['executeAutoSchedule', 'updateSubTaskLog', 'addCustomNode', 'sendEmailWithAttachments', 'updateTaskSchedule', 'toggleTaskStatus', 'deleteTask', 'editLog', 'deleteLog', 'updateTaskOrder', 'batchUpdateTaskSchedule', 'refreshSchedule'];
+          const mutativeActions = ['executeAutoSchedule', 'updateSubTaskLog', 'addCustomNode', 'sendEmailWithAttachments', 'updateTaskSchedule', 'toggleTaskStatus', 'deleteTask', 'editLog', 'deleteLog', 'updateTaskOrder', 'batchUpdateTaskSchedule', 'refreshSchedule', 'clearFutureSchedule'];
           if (!navigator.onLine && mutativeActions.includes(action)) {
             OfflineQueueManager.enqueue(action, payload);
             return { message: "已轉入離線佇列，連線後將自動同步" };
@@ -493,13 +501,36 @@
         const btn = document.getElementById("btn-auto-schedule");
 
         if (!activeProj || !startDate) { showToast("請選擇專案及預計啟動日期！", "error"); return; }
+        
+        btn.disabled = true; 
+        btn.innerHTML = `<i data-lucide="loader" style="width:18px; height:18px; animation: spin 1s linear infinite;"></i> 排程中 (0%)`; 
+        lucide.createIcons();
+
+        let progress = 0;
+        const simInterval = setInterval(() => {
+          progress += Math.floor(Math.random() * 20) + 10; 
+          if (progress > 90) progress = 90;
+          btn.innerHTML = `<i data-lucide="loader" style="width:18px; height:18px; animation: spin 1s linear infinite;"></i> 排程中 (${progress}%)`;
+          lucide.createIcons();
+        }, 500);
+
         try {
-          btn.disabled = true; btn.innerHTML = `<i data-lucide="loader" style="width:18px; height:18px; animation: spin 1s linear infinite;"></i> 排程計算中...`; lucide.createIcons();
           const result = await apiClient.call('executeAutoSchedule', { projectId: activeProj, startDate: startDate });
+          clearInterval(simInterval);
+          btn.innerHTML = `<i data-lucide="check" style="width:18px; height:18px;"></i> 排程成功 (100%)`; 
+          lucide.createIcons();
           showToast(result.message || "自動排程成功！", "info");
           const freshData = await apiClient.call('getInitialData'); StateStore.setInitialData(freshData);
-        } catch (err) { showToast("排程失敗：" + err.toString(), "error");
-        } finally { btn.disabled = false; btn.innerHTML = `<i data-lucide="calendar-plus" style="width:18px; height:18px;"></i> 開始自動排程`; lucide.createIcons(); }
+        } catch (err) { 
+          clearInterval(simInterval);
+          showToast("排程失敗：" + err.toString(), "error");
+        } finally { 
+          setTimeout(() => {
+            btn.disabled = false; 
+            btn.innerHTML = `<i data-lucide="calendar-plus" style="width:18px; height:18px;"></i> 開始自動排程`; 
+            lucide.createIcons();
+          }, 2000);
+        }
       }
       const styleSheet = document.createElement("style"); styleSheet.innerText = `@keyframes spin { 100% { transform: rotate(360deg); } }`; document.head.appendChild(styleSheet);
 
@@ -514,7 +545,7 @@
         
         let progress = 0;
         const simInterval = setInterval(() => {
-          progress += 25;
+          progress += Math.floor(Math.random() * 20) + 10;
           if (progress > 90) progress = 90;
           btn.innerHTML = `<i data-lucide="loader" style="width:16px; height:16px; animation: spin 1s linear infinite;"></i> 刷新中 (${progress}%)`;
           lucide.createIcons();
@@ -523,7 +554,8 @@
         try {
           const result = await apiClient.call('refreshSchedule', { projectId: activeProj });
           clearInterval(simInterval);
-          btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 刷新成功`; lucide.createIcons();
+          btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 刷新成功 (100%)`; 
+          lucide.createIcons();
           showToast(result.message || "排程刷新成功！", "info");
           const freshData = await apiClient.call('getInitialData'); StateStore.setInitialData(freshData);
         } catch(e) {
@@ -532,7 +564,36 @@
         } finally {
           setTimeout(() => {
             btn.disabled = false; 
-            btn.innerHTML = `<i data-lucide="refresh-cw" style="width:16px; height:16px;"></i> 刷新排程`; lucide.createIcons();
+            btn.innerHTML = `<i data-lucide="refresh-cw" style="width:16px; height:16px;"></i> 刷新排程`; 
+            lucide.createIcons();
+          }, 2000);
+        }
+      }
+
+      async function handleClearScheduleClick() {
+        const activeProj = StateStore.get("activeProjectId");
+        if (!activeProj) return showToast("請先選擇專案", "error");
+        
+        if (!confirm("確定要清除 [今日以後] 的所有排程嗎？\n已存在的歷史紀錄將會完美保留，但未來的行程將從日曆中刪除！")) return;
+        
+        const btn = document.getElementById("btn-clear-schedule");
+        btn.disabled = true; 
+        btn.innerHTML = `<i data-lucide="loader" style="width:16px; height:16px; animation: spin 1s linear infinite;"></i> 清除中...`; 
+        lucide.createIcons();
+
+        try {
+          const result = await apiClient.call('clearFutureSchedule', { projectId: activeProj });
+          btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 清除成功`; 
+          lucide.createIcons();
+          showToast(result.message || "清除成功！", "info");
+          const freshData = await apiClient.call('getInitialData'); StateStore.setInitialData(freshData);
+        } catch(e) {
+          showToast("清除失敗：" + e.toString(), "error");
+        } finally {
+          setTimeout(() => {
+            btn.disabled = false; 
+            btn.innerHTML = `<i data-lucide="trash-2" style="width:16px; height:16px;"></i> 清除排程`; 
+            lucide.createIcons();
           }, 2000);
         }
       }
@@ -565,7 +626,6 @@
         const todayStr = new Date().toISOString().split('T')[0];
         const allEvents = StateStore.get('calendarEvents') || [];
         
-        // 1. 分類任務與計算今日最早任務時間
         let projects = originalProjects.map(proj => {
            let todayTasks = [];
            let futureTasks = [];
@@ -580,7 +640,6 @@
            return { ...proj, todayTasks, futureTasks };
         });
 
-        // 排序：有今日任務的優先，再按最早時間排序
         projects.sort((a, b) => {
            let aHas = a.todayTasks.length > 0;
            let bHas = b.todayTasks.length > 0;
@@ -598,7 +657,6 @@
           if(proj.workLog && Array.isArray(proj.workLog)) {
               loggedTasks = new Set(proj.workLog.map(l => l.taskName)).size;
           }
-          // 抓取報價內容(若有)
           const quoteData = proj.quoteData || {};
           let quoteHtml = '';
           if (Object.keys(quoteData).length > 0) {
@@ -610,7 +668,8 @@
               </div>`;
           }
 
-          const progress = Math.min(100, Math.floor((loggedTasks / 5) * 100)); // 簡易進度
+          const hasCompletedTasks = Object.values(proj.taskStatus || {}).includes(true);
+          const progress = Math.min(100, Math.floor((loggedTasks / 5) * 100)); 
           const renderTaskList = (tasks) => tasks.map(t => `<div style="padding:4px 0; font-size:13px; display:flex; gap:8px;"><span style="color:var(--text-muted);">${new Date(t.startTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span> <span>${t.taskName}</span></div>`).join('');
           
           html += `
@@ -649,9 +708,15 @@
                   </div>
                 ` : ''}
 
-                <button class="btn-primary" style="width:100%;" onclick="jumpToFishbone('${proj.projectId}')">
-                  <i data-lucide="arrow-right" style="width:16px;height:16px;"></i> 一鍵前往魚骨圖查看與編輯
-                </button>
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <button class="btn-primary" style="width:100%;" onclick="jumpToFishbone('${proj.projectId}')">
+                    <i data-lucide="arrow-right" style="width:16px;height:16px;"></i> 一鍵前往魚骨圖查看與編輯
+                  </button>
+                  ${hasCompletedTasks ? `
+                  <button class="btn-secondary" style="width:100%; border: 1px solid #111111; color: #111111;" onclick="jumpToEmail('${proj.projectId}')">
+                    <i data-lucide="mail" style="width:16px;height:16px;"></i> 專案有已完成任務，一鍵前往 Email
+                  </button>` : ''}
+                </div>
               </div>
             </div>`;
         });
@@ -663,6 +728,13 @@
          const selectEl = document.getElementById("project-select");
          if(selectEl) { selectEl.value = projectId; selectEl.dispatchEvent(new Event('change')); }
          switchView('fishbone', document.querySelectorAll('.nav-item')[1]);
+      }
+
+      function jumpToEmail(projectId) {
+         StateStore.set('activeProjectId', projectId);
+         const selectEl = document.getElementById("project-select");
+         if(selectEl) { selectEl.value = projectId; selectEl.dispatchEvent(new Event('change')); }
+         switchView('email', document.querySelectorAll('.nav-item')[2]);
       }
 
       function toggleAccordion(headerEl) {
@@ -840,7 +912,6 @@
               if (isCompleted) { cardBg = "#111111"; textColor = "#FFFFFF"; mutedColor = "#999999"; borderColor = "#333333"; } 
               else if (hasLog) { cardBg = "#F4F4F5"; }
               
-              // 組合 Inline Form 的 ID
               const editDateId = `inline-edit-date-${i}`;
               const addLogId = `inline-add-log-${i}`;
 
@@ -881,7 +952,6 @@
                   </div>
                 </div>
                 
-                <!-- Inline 排程修改 -->
                 <div id="${editDateId}" class="inline-action-panel card-mono" style="display:none; margin-top:-8px; border-top:none; border-radius:0 0 8px 8px; background:#fff; border-color:var(--border-light);">
                   <div style="display:flex; align-items:center; gap:12px;">
                      <label style="font-size:13px; font-weight:600;">新排程日期：</label>
@@ -891,7 +961,6 @@
                   </div>
                 </div>
 
-                <!-- Inline 新增日誌 -->
                 <div id="${addLogId}" class="inline-action-panel card-mono" style="display:none; margin-top:-8px; border-top:none; border-radius:0 0 8px 8px; background:#fff; border-color:var(--border-light);">
                    <div style="display:flex; flex-direction:column; gap:8px;">
                      <label style="font-size:13px; font-weight:600;">撰寫日誌</label>
@@ -971,7 +1040,6 @@
                      ${!isSystem ? `<div class="caption" style="margin-top:8px; display:flex; align-items:center; gap:4px; color:var(--text-muted);"><i data-lucide="clock" style="width:12px; height:12px;"></i> 工時: ${l.duration} hr</div>` : ''}
                   </div>
                   
-                  <!-- Inline 修改歷史日誌 -->
                   ${!isSystem ? `
                   <div id="${editLogId}" class="inline-action-panel card-mono" style="display:none; margin-top:-8px; border-top:none; border-radius:0 0 8px 8px; background:#fff; border-color:var(--border-light);">
                      <textarea id="hist-log-text-${i}" class="input-field" style="min-height:60px; margin-bottom:8px;">${l.logContent}</textarea>
@@ -1020,7 +1088,6 @@
           renderFishboneDiagram(); 
       }
 
-      // Drag & Drop
       function handleDragStart(e) {
           draggedTaskName = e.currentTarget.getAttribute('data-task-name');
           draggedItemElement = e.currentTarget;
@@ -1149,7 +1216,6 @@
         );
       }
 
-      // Email Custom Autocomplete 
       function setupAutocomplete(inputId, dataList, parseOnSelect) {
           const input = document.getElementById(inputId);
           if(!input) return;

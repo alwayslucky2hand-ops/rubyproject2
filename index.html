@@ -934,69 +934,117 @@
         
         let svgHtml = '';
         
-        // 繪製單一節點 SVG 的邏輯 (極致美學極簡版)
+        // 繪製單一節點 SVG 的邏輯 (加入當日黃色 Highlight 高光版)
         const genNodeSvg = (node, index, cx, cy, isTop) => {
            let isActive = fishboneActiveNode === (node.name + '_' + node.phase);
            
-           // 【美學設定 1】極簡配色 Palette
+           // 【美學設定 1】極簡 UI 配色
            let fill = isActive ? '#111111' : '#FFFFFF';
            let textFill = isActive ? '#FFFFFF' : '#111111';
-           let strokeColor = isActive ? '#111111' : '#E5E5E5'; // 未選中時用極淡的灰色邊框
-           let accentColor = '#ea580c'; // 你要求的質感紅橘色
+           let strokeColor = isActive ? '#111111' : '#E5E5E5'; 
+           let accentColor = '#ea580c'; // 你的專屬質感紅橘色
 
-           // 【美學設定 2】日期雙位數補零 (例如 07/08)
+           // 【核心邏輯】精算工時與完成率
+           let totalHours = 0;
+           let completedHours = 0;
+           node.tasks.forEach(t => {
+               let dur = parseFloat(t.duration) || 0;
+               totalHours += dur;
+               if (taskStatusObj[t.name] === true) {
+                   completedHours += dur;
+               }
+           });
+           let progressPercent = totalHours === 0 ? 0 : Math.round((completedHours / totalHours) * 100);
+
+           // 【美學設定 2】左側極致質感「線條進度環」
+           const pr = 10; 
+           const pcx = cx - 48; 
+           const pcy = cy;
+           const circumference = 2 * Math.PI * pr;
+           const strokeDashoffset = circumference - (progressPercent / 100) * circumference;
+           let ringColor = progressPercent === 100 ? '#111111' : accentColor;
+           
+           let progressSvg = `
+               <g style="opacity: ${totalHours > 0 ? 1 : 0.4};">
+                   <circle cx="${pcx}" cy="${pcy}" r="${pr}" fill="none" stroke="#F4F4F5" stroke-width="1.5" />
+                   <circle cx="${pcx}" cy="${pcy}" r="${pr}" fill="none" stroke="${ringColor}" stroke-width="1.5" stroke-dasharray="${circumference}" stroke-dashoffset="${strokeDashoffset}" stroke-linecap="round" transform="rotate(-90 ${pcx} ${pcy})" style="transition: stroke-dashoffset 0.5s ease;" />
+                   <text x="${pcx}" y="${pcy + 2.5}" font-size="7" font-family="'Inter', sans-serif" font-weight="600" text-anchor="middle" fill="#666666">${progressPercent}</text>
+               </g>
+           `;
+
+           // 【美學設定 3】日期排版與「當日黃色 Highlight」判斷
            let nodeDateStr = "尚未排程";
            const scheduledTasks = node.tasks.filter(t => t.startTime);
            if (scheduledTasks.length > 0) {
                scheduledTasks.sort((a,b) => new Date(a.startTime) - new Date(b.startTime));
                const d = new Date(scheduledTasks[0].startTime);
-               // 使用 padStart 確保永遠是雙位數
                nodeDateStr = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
            }
            
+           // 判斷該節點日期是否等於今天
            let isTodayNode = (nodeDateStr === todayFormatted);
-           let finalDateColor = nodeDateStr === "尚未排程" ? "#999999" : accentColor;
-           let dateFontWeight = nodeDateStr === "尚未排程" ? "400" : "600";
+           
+           // 文字顏色邏輯：尚未排程(灰)、今日(深黑，確保在黃底上清晰)、其他(紅橘)
+           let finalDateColor = nodeDateStr === "尚未排程" ? "#999999" : (isTodayNode ? "#111111" : accentColor);
+           let dateFontWeight = nodeDateStr === "尚未排程" ? "400" : "700";
 
-           // 【美學設定 3】極致排版：精算 Y 軸呼吸空間
-           // isTop (上排): 日期在最上面，名稱在中間，圓圈在下面
-           // !isTop (下排): 圓圈在上面，名稱在中間，日期在最下面
-           let nameY = isTop ? cy - 32 : cy + 42;
-           let dateY = isTop ? cy - 54 : cy + 62;
+           // 【美學設定 4】無省略號、適度換行的字體排版
+           let maxChars = 8; 
+           let nameLines = [];
+           for (let i = 0; i < node.name.length; i += maxChars) {
+               nameLines.push(node.name.slice(i, i + maxChars));
+           }
+
+           let nameHtml = '';
+           let dateY;
            let lineStartY = isTop ? cy + 24 : cy - 24; 
-           let lineEndY = isTop ? cy + 45 : cy - 45; // 連接至主軸的乾淨短線
+           let lineEndY = isTop ? cy + 45 : cy - 45; 
 
-           // 節點名稱 (過長時優雅省略)
-           let nodeNameStr = node.name.length > 12 ? node.name.substring(0,12) + '...' : node.name;
+           if (isTop) {
+               dateY = cy - 40 - (nameLines.length * 18); 
+               nameLines.forEach((line, idx) => {
+                   let ly = cy - 34 - ((nameLines.length - 1 - idx) * 18);
+                   nameHtml += `<text x="${cx}" y="${ly}" font-size="13" font-family="'Noto Sans TC', sans-serif" font-weight="600" text-anchor="middle" fill="#111111" letter-spacing="0.5">${line}</text>`;
+               });
+           } else {
+               nameLines.forEach((line, idx) => {
+                   let ly = cy + 44 + (idx * 18);
+                   nameHtml += `<text x="${cx}" y="${ly}" font-size="13" font-family="'Noto Sans TC', sans-serif" font-weight="600" text-anchor="middle" fill="#111111" letter-spacing="0.5">${line}</text>`;
+               });
+               dateY = cy + 46 + (nameLines.length * 18); 
+           }
 
-           // 今日任務的背景高光
+           // 【重點實作】今日任務背景黃色高光 (Highlighter)
            let dateBgHtml = '';
            if (isTodayNode) {
-               dateBgHtml = `<rect x="${cx - 42}" y="${dateY - 12}" width="84" height="18" rx="9" fill="#fef08a" />`;
-               finalDateColor = "#854d0e";
-               dateFontWeight = "700";
+               // 繪製黃色矩形：x 向左推置中，y 向上推包覆文字，rx="4" 增加微圓角質感
+               dateBgHtml = `<rect x="${cx - 40}" y="${dateY - 13}" width="80" height="18" rx="4" fill="#FDE047" />`;
            }
 
            return `
              <g style="cursor:pointer; outline: none;" onclick="selectFishboneNode('${node.name}_${node.phase}')">
-               <!-- 加大透明點擊區域，不影響視覺但提升操作手感 -->
-               <rect x="${cx - 60}" y="${isTop ? cy - 80 : cy - 30}" width="120" height="110" fill="transparent" />
+               <!-- 隱形點擊區域 -->
+               <rect x="${cx - 70}" y="${isTop ? dateY - 20 : cy - 30}" width="140" height="${isTop ? cy - dateY + 50 : dateY - cy + 50}" fill="transparent" />
 
-               <!-- 日期 (紅橘色字體、雙位數格式) -->
+               <!-- 1. 繪製黃色高光背景 (必須在文字前面，SVG的圖層是後寫的蓋在上面) -->
                ${dateBgHtml}
+               <!-- 2. 繪製日期文字 -->
                <text x="${cx}" y="${dateY}" font-size="12" font-family="'Inter', sans-serif" font-weight="${dateFontWeight}" text-anchor="middle" fill="${finalDateColor}" letter-spacing="0.5">${nodeDateStr}</text>
 
-               <!-- 工作節點名稱 (移出圓圈外，套用質感字距) -->
-               <text x="${cx}" y="${nameY}" font-size="14" font-family="'Noto Sans TC', sans-serif" font-weight="600" text-anchor="middle" fill="#111111" letter-spacing="0.5">${nodeNameStr}</text>
+               <!-- 動態換行後的工作節點名稱 -->
+               ${nameHtml}
 
-               <!-- 連結主軸的虛線 (減低視覺干擾，改用淡淡的灰線) -->
-               <line x1="${cx}" y1="${lineStartY}" x2="${cx}" y2="${lineEndY}" stroke="#CCCCCC" stroke-width="1.5" stroke-dasharray="3 3" />
+               <!-- 連接主軸的極細淡灰虛線 -->
+               <line x1="${cx}" y1="${lineStartY}" x2="${cx}" y2="${lineEndY}" stroke="#E5E5E5" stroke-width="1.5" stroke-dasharray="3 3" />
 
-               <!-- 圓圈本身 (乾淨無文字干擾) -->
+               <!-- 圓圈主體 -->
                <circle cx="${cx}" cy="${cy}" r="24" fill="${fill}" stroke="${strokeColor}" stroke-width="2" style="transition: all 0.3s ease;" />
                
-               <!-- 圓圈內的純粹數字 (1, 2, 3...) -->
+               <!-- 圓圈內的純粹數字 -->
                <text x="${cx}" y="${cy + 5}" font-size="16" font-family="'Inter', sans-serif" font-weight="600" text-anchor="middle" fill="${textFill}">${index+1}</text>
+               
+               <!-- 左側：極致質感進度環 -->
+               ${progressSvg}
              </g>
            `;
         };

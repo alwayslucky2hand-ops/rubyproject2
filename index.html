@@ -479,7 +479,7 @@
       };
 
       const StateStore = {
-        state: { projectsList: [], serviceCatalog: [], contractItems: [], calendarEvents: [], activeProjectId: null, emailMenu: {}, pendingQuotes: [] },
+        state: { projectsList: [], serviceCatalog: [], contractItems: [], calendarEvents: [], activeProjectKey: null, emailMenu: {}, pendingQuotes: [] },
         saveToLocalStorage: function() { try { localStorage.setItem("ruby_pm_state", JSON.stringify(this.state)); } catch (e) {} },
         loadFromLocalStorage: function() { try { const cached = localStorage.getItem("ruby_pm_state"); if (cached) { this.state = JSON.parse(cached); EventHub.emit("stateLoadedFromCache", this.state); } } catch (e) {} },
         setInitialData: function(data) {
@@ -504,13 +504,14 @@
           if (pSelectEl) {
              pSelectEl.innerHTML = '<option value="">請選擇已建立之專案...</option>';
              state.projectsList.forEach(project => {
-               const opt = document.createElement("option"); opt.value = project.projectId;
-               opt.textContent = `[${project.projectId}] ${project.companyName || project.clientName}`;
+               const key = `${project.sheetType}_${project._rowId}`;
+               const opt = document.createElement("option"); opt.value = key;
+               opt.textContent = `[${project.companyName || project.clientName}] ${project.projectId} - ${project.serviceItem}`;
                pSelectEl.appendChild(opt);
              });
-             if (state.activeProjectId) { 
-                 pSelectEl.value = state.activeProjectId; 
-                 handleFishboneProjectChange(state.activeProjectId); 
+             if (state.activeProjectKey) { 
+                 pSelectEl.value = state.activeProjectKey; 
+                 handleFishboneProjectChange(state.activeProjectKey); 
              }
           }
 
@@ -526,16 +527,19 @@
       }
 
       function handleFishboneProjectChange(val) {
-          StateStore.set("activeProjectId", val);
+          StateStore.set("activeProjectKey", val);
           const infoDiv = document.getElementById("fishbone-project-info");
           if (!val) { infoDiv.style.display = "none"; renderFishboneDiagram(); return; }
           
-          const project = StateStore.get("projectsList").find(p => p.projectId === val);
+          const [sheetType, rowIdStr] = val.split('_');
+          const rowId = parseInt(rowIdStr, 10);
+          const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === rowId);
+          
           if(project) {
               infoDiv.innerHTML = `
                   <div style="font-size:14px; display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
                       <span class="badge-mono" style="font-size:14px;">${project.projectId}</span>
-                      <span style="font-weight:700; font-size:16px;">${project.companyName || project.clientName}</span>
+                      <span style="font-weight:700; font-size:16px;">${project.companyName || project.clientName} - ${project.serviceItem}</span>
                       <span style="color:var(--text-muted);"><i data-lucide="user" style="width:14px;"></i> 客戶ID: ${project.clientId || 'N/A'}</span>
                   </div>
               `;
@@ -578,9 +582,9 @@
          
          showToast("正在刪除專案...", "info");
          try {
-            await apiClient.call('deleteProjectFromSheet', { projectId, sheetType });
+            await apiClient.call('deleteProjectFromSheet', { projectId, sheetType, rowId });
             showToast("專案刪除成功！", "info");
-            StateStore.set("activeProjectId", null);
+            StateStore.set("activeProjectKey", null);
             const freshData = await apiClient.call('getInitialData'); StateStore.setInitialData(freshData);
          } catch(e) {
             showToast("刪除失敗：" + e.toString(), "error");
@@ -590,12 +594,16 @@
       const styleSheet = document.createElement("style"); styleSheet.innerText = `@keyframes spin { 100% { transform: rotate(360deg); } }`; document.head.appendChild(styleSheet);
 
       async function handleAutoScheduleClick() {
-        const activeProj = StateStore.get("activeProjectId");
+        const activeProjectKey = StateStore.get("activeProjectKey");
         const startDate = document.getElementById("start-date-input").value;
         const btn = document.getElementById("btn-auto-schedule");
 
-        if (!activeProj || !startDate) { showToast("請先從上方選擇專案並填寫預計啟動日期！", "error"); return; }
+        if (!activeProjectKey || !startDate) { showToast("請先從上方選擇專案並填寫預計啟動日期！", "error"); return; }
         
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === parseInt(rowIdStr, 10));
+        if (!project) return;
+
         btn.disabled = true; 
         btn.innerHTML = `<i data-lucide="loader" style="width:16px; height:16px; animation: spin 1s linear infinite;"></i> 排程中 (0%)`; 
         lucide.createIcons();
@@ -609,7 +617,13 @@
         }, 500);
 
         try {
-          const result = await apiClient.call('executeAutoSchedule', { projectId: activeProj, startDate: startDate });
+          const result = await apiClient.call('executeAutoSchedule', { 
+              projectId: project.projectId, 
+              sheetType: project.sheetType, 
+              rowId: project._rowId, 
+              serviceItem: project.serviceItem, 
+              startDate: startDate 
+          });
           clearInterval(simInterval);
           btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 排程成功`; 
           lucide.createIcons();
@@ -628,9 +642,13 @@
       }
 
       async function handleRefreshScheduleClick() {
-        const activeProj = StateStore.get("activeProjectId");
-        if (!activeProj) return showToast("請先選擇專案", "error");
+        const activeProjectKey = StateStore.get("activeProjectKey");
+        if (!activeProjectKey) return showToast("請先選擇專案", "error");
         
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === parseInt(rowIdStr, 10));
+        if (!project) return;
+
         const btn = document.getElementById("btn-refresh-schedule");
         btn.disabled = true; 
         btn.innerHTML = `<i data-lucide="loader" style="width:16px; height:16px; animation: spin 1s linear infinite;"></i> 刷新中 (0%)`; 
@@ -645,7 +663,12 @@
         }, 500);
 
         try {
-          const result = await apiClient.call('refreshSchedule', { projectId: activeProj });
+          const result = await apiClient.call('refreshSchedule', { 
+              projectId: project.projectId, 
+              sheetType: project.sheetType, 
+              rowId: project._rowId, 
+              serviceItem: project.serviceItem 
+          });
           clearInterval(simInterval);
           btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 刷新成功`; 
           lucide.createIcons();
@@ -664,9 +687,13 @@
       }
 
       async function handleClearScheduleClick() {
-        const activeProj = StateStore.get("activeProjectId");
-        if (!activeProj) return showToast("請先選擇專案", "error");
+        const activeProjectKey = StateStore.get("activeProjectKey");
+        if (!activeProjectKey) return showToast("請先選擇專案", "error");
         
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === parseInt(rowIdStr, 10));
+        if (!project) return;
+
         if (!confirm("確定要清除 [今日以後] 的所有排程嗎？\n已存在的歷史紀錄將會完美保留，但未來的行程將從日曆中刪除！")) return;
         
         const btn = document.getElementById("btn-clear-schedule");
@@ -675,7 +702,12 @@
         lucide.createIcons();
 
         try {
-          const result = await apiClient.call('clearFutureSchedule', { projectId: activeProj });
+          const result = await apiClient.call('clearFutureSchedule', { 
+              projectId: project.projectId,
+              sheetType: project.sheetType, 
+              rowId: project._rowId, 
+              serviceItem: project.serviceItem
+          });
           btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 清除成功`; 
           lucide.createIcons();
           showToast(result.message || "清除成功！", "info");
@@ -723,7 +755,7 @@
         let projects = originalProjects.map(proj => {
            let todayTasks = [];
            let futureTasks = [];
-           let projEvents = allEvents.filter(e => e.projectId === proj.projectId && e.startTime);
+           let projEvents = allEvents.filter(e => e.projectId === proj.projectId && e.serviceItem === proj.serviceItem && e.startTime);
            projEvents.forEach(e => {
                let eDateObj = new Date(e.startTime);
                let eDateStr = `${eDateObj.getFullYear()}/${String(eDateObj.getMonth()+1).padStart(2,'0')}/${String(eDateObj.getDate()).padStart(2,'0')}`;
@@ -770,8 +802,10 @@
               ? `<span class="badge-mono" style="background:#fef08a; color:#854d0e; font-size:11px; font-weight:700; padding:2px 6px; border-radius:4px; margin-right:8px; display:inline-flex; align-items:center; gap:2px;"><i data-lucide="zap" style="width:12px;height:12px;"></i> 今日有任務</span>` 
               : '';
 
+          const projKey = `${proj.sheetType}_${proj._rowId}`;
+
           html += `
-            <div class="accordion-item" data-project-id="${proj.projectId}">
+            <div class="accordion-item" data-project-key="${projKey}">
               <div class="accordion-header" onclick="toggleAccordion(this)">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                   <div style="font-weight: 600; font-size: 15px; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
@@ -807,11 +841,11 @@
                 ` : ''}
 
                 <div style="display:flex; flex-direction:column; gap:8px;">
-                  <button class="btn-primary" style="width:100%;" onclick="jumpToFishbone('${proj.projectId}')">
+                  <button class="btn-primary" style="width:100%;" onclick="jumpToFishbone('${proj.sheetType}', '${proj._rowId}')">
                     <i data-lucide="arrow-right" style="width:16px;height:16px;"></i> 一鍵前往魚骨圖查看與編輯排程
                   </button>
                   ${hasCompletedTasks ? `
-                  <button class="btn-secondary" style="width:100%; border: 1px solid #111111; color: #111111;" onclick="jumpToEmail('${proj.projectId}')">
+                  <button class="btn-secondary" style="width:100%; border: 1px solid #111111; color: #111111;" onclick="jumpToEmail('${proj.sheetType}', '${proj._rowId}')">
                     <i data-lucide="mail" style="width:16px;height:16px;"></i> 專案有已完成任務，一鍵前往 Email
                   </button>` : ''}
                   <button class="btn-secondary" style="width:100%; color:#ef4444; border-color:#ef4444;" onclick="handleDeleteProject('${proj.projectId}', '${proj.sheetType}', ${proj._rowId})">
@@ -824,20 +858,20 @@
         container.innerHTML = html; lucide.createIcons();
       }
 
-      function jumpToFishbone(projectId) {
-         // 【修復重點 1】：跳轉前先清除殘留的舊節點記憶
+      function jumpToFishbone(sheetType, rowId) {
          fishboneActiveNode = null; 
-         
-         StateStore.set('activeProjectId', projectId);
+         const key = `${sheetType}_${rowId}`;
+         StateStore.set('activeProjectKey', key);
          const selectEl = document.getElementById("project-select-fishbone");
          if(selectEl) { 
-            selectEl.value = projectId; 
+            selectEl.value = key; 
          }
          switchView('fishbone', document.querySelectorAll('.nav-item')[1]);
       }
 
-      function jumpToEmail(projectId) {
-         StateStore.set('activeProjectId', projectId);
+      function jumpToEmail(sheetType, rowId) {
+         const key = `${sheetType}_${rowId}`;
+         StateStore.set('activeProjectKey', key);
          switchView('email', document.querySelectorAll('.nav-item')[2]);
       }
 
@@ -850,9 +884,9 @@
         
         if (!isCurrentlyOpen) {
           currentBody.style.display = 'block';
-          const projId = currentItem.getAttribute('data-project-id');
-          if (projId && StateStore.get('activeProjectId') !== projId) {
-            StateStore.set('activeProjectId', projId);
+          const projKey = currentItem.getAttribute('data-project-key');
+          if (projKey && StateStore.get('activeProjectKey') !== projKey) {
+            StateStore.set('activeProjectKey', projKey);
           }
         }
       }
@@ -867,20 +901,24 @@
       }
 
       function renderFishboneDiagram() {
-        const activeProjId = StateStore.get('activeProjectId');
+        const activeProjectKey = StateStore.get('activeProjectKey');
         const containerId = 'fishbone-svg-container';
         const detailContainer = document.getElementById('fishbone-detail-container');
         
-        if (!activeProjId) {
+        if (!activeProjectKey) {
           renderEmptyState(containerId, 'folder-search', '請先自專案手風琴中選擇並產出專案以查看魚骨圖');
           detailContainer.innerHTML = ''; return;
         }
         
-        const project = StateStore.get('projectsList').find(p => p.projectId === activeProjId);
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const rowId = parseInt(rowIdStr, 10);
+        const project = StateStore.get('projectsList').find(p => p.sheetType === sheetType && p._rowId === rowId);
+        
         if (!project) return;
+        const activeProjId = project.projectId;
         
         const calendarEvents = StateStore.get('calendarEvents') || [];
-        const projectEvents = calendarEvents.filter(e => e.projectId === activeProjId);
+        const projectEvents = calendarEvents.filter(e => e.projectId === activeProjId && e.serviceItem === project.serviceItem);
         const eventMap = {};
         projectEvents.forEach(e => { eventMap[`${e.nodeName}_${e.taskName}`] = e.startTime; });
 
@@ -911,7 +949,6 @@
 
         if (fishboneActiveNode) fishboneActiveNode = String(fishboneActiveNode).trim();
         
-        // 【修復重點 2】：防呆機制！如果目前記憶的節點不在新專案裡面，強制重置為第一個節點
         if (!fishboneActiveNode || !nodesMap.has(fishboneActiveNode)) {
             if (nodesList.length > 0) {
                 fishboneActiveNode = nodesList[0].name + '_' + nodesList[0].phase;
@@ -934,17 +971,14 @@
         
         let svgHtml = '';
         
-        // 繪製單一節點 SVG 的邏輯 (加入當日黃色 Highlight 高光版)
         const genNodeSvg = (node, index, cx, cy, isTop) => {
            let isActive = fishboneActiveNode === (node.name + '_' + node.phase);
            
-           // 【美學設定 1】極簡 UI 配色
            let fill = isActive ? '#111111' : '#FFFFFF';
            let textFill = isActive ? '#FFFFFF' : '#111111';
            let strokeColor = isActive ? '#111111' : '#E5E5E5'; 
-           let accentColor = '#ea580c'; // 你的專屬質感紅橘色
+           let accentColor = '#ea580c'; 
 
-           // 【核心邏輯】精算工時與完成率
            let totalHours = 0;
            let completedHours = 0;
            node.tasks.forEach(t => {
@@ -956,7 +990,6 @@
            });
            let progressPercent = totalHours === 0 ? 0 : Math.round((completedHours / totalHours) * 100);
 
-           // 【美學設定 2】左側極致質感「線條進度環」
            const pr = 10; 
            const pcx = cx - 48; 
            const pcy = cy;
@@ -972,7 +1005,6 @@
                </g>
            `;
 
-           // 【美學設定 3】日期排版與「當日黃色 Highlight」判斷
            let nodeDateStr = "尚未排程";
            const scheduledTasks = node.tasks.filter(t => t.startTime);
            if (scheduledTasks.length > 0) {
@@ -981,14 +1013,10 @@
                nodeDateStr = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
            }
            
-           // 判斷該節點日期是否等於今天
            let isTodayNode = (nodeDateStr === todayFormatted);
-           
-           // 文字顏色邏輯：尚未排程(灰)、今日(深黑，確保在黃底上清晰)、其他(紅橘)
            let finalDateColor = nodeDateStr === "尚未排程" ? "#999999" : (isTodayNode ? "#111111" : accentColor);
            let dateFontWeight = nodeDateStr === "尚未排程" ? "400" : "700";
 
-           // 【美學設定 4】無省略號、適度換行的字體排版
            let maxChars = 8; 
            let nameLines = [];
            for (let i = 0; i < node.name.length; i += maxChars) {
@@ -1014,10 +1042,8 @@
                dateY = cy + 46 + (nameLines.length * 18); 
            }
 
-           // 【重點實作】今日任務背景黃色高光 (Highlighter)
            let dateBgHtml = '';
            if (isTodayNode) {
-               // 繪製黃色矩形：x 向左推置中，y 向上推包覆文字，rx="4" 增加微圓角質感
                dateBgHtml = `<rect x="${cx - 40}" y="${dateY - 13}" width="80" height="18" rx="4" fill="#FDE047" />`;
            }
 
@@ -1026,7 +1052,7 @@
                <!-- 隱形點擊區域 -->
                <rect x="${cx - 70}" y="${isTop ? dateY - 20 : cy - 30}" width="140" height="${isTop ? cy - dateY + 50 : dateY - cy + 50}" fill="transparent" />
 
-               <!-- 1. 繪製黃色高光背景 (必須在文字前面，SVG的圖層是後寫的蓋在上面) -->
+               <!-- 1. 繪製黃色高光背景 -->
                ${dateBgHtml}
                <!-- 2. 繪製日期文字 -->
                <text x="${cx}" y="${dateY}" font-size="12" font-family="'Inter', sans-serif" font-weight="${dateFontWeight}" text-anchor="middle" fill="${finalDateColor}" letter-spacing="0.5">${nodeDateStr}</text>
@@ -1091,7 +1117,6 @@
         
         const activeData = nodesMap.get(fishboneActiveNode);
         
-        // 【修復重點 3】：終極防呆！萬一找不到活躍節點，立刻中斷，保護整個網頁不崩潰
         if (!activeData) {
             detailContainer.innerHTML = '<p class="caption">無法載入節點資料，請重新選擇節點。</p>';
             return;
@@ -1168,7 +1193,7 @@
                   </div>
                   
                   <div style="display:flex; gap: 4px; flex-wrap:wrap;">
-                    <button class="btn-icon success ${isCompleted ? 'active' : ''}" title="${isCompleted ? '取消完成' : '標示完成'}" onclick="toggleTaskCompletion('${project.projectId}', '${project._rowId}', '${project.sheetType}', '${t.name}', ${isCompleted})">
+                    <button class="btn-icon success ${isCompleted ? 'active' : ''}" title="${isCompleted ? '取消完成' : '標示完成'}" onclick="toggleTaskCompletion('${project.projectId}', '${project.sheetType}', ${project._rowId}, '${t.name}', ${isCompleted})">
                       <i data-lucide="${isCompleted ? 'check-circle-2' : 'check'}" style="width:16px; height:16px;"></i>
                     </button>
                     <button class="btn-icon" title="排程 / 改期" onclick="toggleInlinePanel('${editDateId}')">
@@ -1177,7 +1202,7 @@
                     <button class="btn-icon" title="寫日誌" onclick="toggleInlinePanel('${addLogId}')">
                       <i data-lucide="pencil" style="width:16px; height:16px;"></i>
                     </button>
-                    <button class="btn-icon danger" title="刪除任務" onclick="confirmDeleteTask('${project.projectId}', '${project._rowId}', '${project.sheetType}', '${activeData.name}', '${t.name}')">
+                    <button class="btn-icon danger" title="刪除任務" onclick="confirmDeleteTask('${project.projectId}', '${project.sheetType}', ${project._rowId}, '${activeData.name}', '${t.name}')">
                       <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
                     </button>
                   </div>
@@ -1187,7 +1212,7 @@
                   <div style="display:flex; align-items:center; gap:12px;">
                      <label style="font-size:13px; font-weight:600;">新排程日期：</label>
                      <input type="date" id="date-input-${i}" class="input-field" value="${rawDate}" style="width:160px; height:36px;">
-                     <button class="btn-primary" style="height:36px; font-size:13px;" onclick="submitEditTaskDate('${project.projectId}', '${activeData.name}', '${t.name}', 'date-input-${i}')">儲存</button>
+                     <button class="btn-primary" style="height:36px; font-size:13px;" onclick="submitEditTaskDate('${project.projectId}', '${project.sheetType}', ${project._rowId}, '${project.serviceItem}', '${activeData.name}', '${t.name}', 'date-input-${i}')">儲存</button>
                      <button class="btn-icon ghost" onclick="toggleInlinePanel('${editDateId}')"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
                   </div>
                 </div>
@@ -1203,7 +1228,7 @@
                         </div>
                         <div style="display:flex; gap:8px;">
                            <button class="btn-secondary" style="height:32px;" onclick="toggleInlinePanel('${addLogId}')">取消</button>
-                           <button class="btn-primary" style="height:32px;" onclick="submitTaskLog('${project.projectId}', '${project._rowId}', '${project.sheetType}', '${activeData.name}', '${t.name}', 'log-input-${i}', 'log-dur-${i}')">寫入</button>
+                           <button class="btn-primary" style="height:32px;" onclick="submitTaskLog('${project.projectId}', '${project.sheetType}', ${project._rowId}, '${project.serviceItem}', '${activeData.name}', '${t.name}', 'log-input-${i}', 'log-dur-${i}')">寫入</button>
                         </div>
                      </div>
                    </div>
@@ -1250,7 +1275,7 @@
                         <button class="btn-icon ghost" title="修改日誌" onclick="toggleInlinePanel('${editLogId}')">
                             <i data-lucide="edit-2" style="width:14px; height:14px;"></i>
                         </button>
-                        <button class="btn-icon ghost danger" title="刪除日誌" onclick="confirmDeleteLog('${project.projectId}', '${project._rowId}', '${project.sheetType}', '${l.timestamp}')">
+                        <button class="btn-icon ghost danger" title="刪除日誌" onclick="confirmDeleteLog('${project.projectId}', '${project.sheetType}', ${project._rowId}, '${l.timestamp}')">
                             <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
                         </button>
                      </div>
@@ -1277,7 +1302,7 @@
                         <input type="number" id="hist-log-dur-${i}" class="input-field" step="0.25" min="0" value="${l.duration}" style="width:80px; height:32px;">
                         <div style="display:flex; gap:8px;">
                            <button class="btn-secondary" style="height:32px;" onclick="toggleInlinePanel('${editLogId}')">取消</button>
-                           <button class="btn-primary" style="height:32px;" onclick="submitEditLog('${project.projectId}', '${project._rowId}', '${project.sheetType}', '${l.timestamp}', 'hist-log-text-${i}', 'hist-log-dur-${i}')">更新</button>
+                           <button class="btn-primary" style="height:32px;" onclick="submitEditLog('${project.projectId}', '${project.sheetType}', ${project._rowId}, '${l.timestamp}', 'hist-log-text-${i}', 'hist-log-dur-${i}')">更新</button>
                         </div>
                      </div>
                   </div>` : ''}
@@ -1347,18 +1372,22 @@
       }
 
       async function updateTaskOrderAndPromptDates(projectId, nodeName, newOrder) {
+          const activeProjectKey = StateStore.get('activeProjectKey');
+          const [sheetType, rowIdStr] = activeProjectKey.split('_');
+          const rowId = parseInt(rowIdStr, 10);
+          
           const projList = StateStore.get('projectsList');
-          const targetProj = projList.find(p => p.projectId === projectId);
+          const targetProj = projList.find(p => p.sheetType === sheetType && p._rowId === rowId);
           if (targetProj) {
               if (!targetProj.taskOrder) targetProj.taskOrder = {};
               targetProj.taskOrder[nodeName] = newOrder;
               StateStore.set('projectsList', projList);
           }
-          apiClient.call('updateTaskOrder', { projectId, nodeName, newOrder });
+          apiClient.call('updateTaskOrder', { projectId, sheetType, rowId, nodeName, newOrder });
           showToast("排序已儲存！請記得點擊時鐘按鈕修改排程日期。", "info");
       }
 
-      async function submitEditLog(projectId, rowId, sheetType, timestamp, textInputId, durInputId) {
+      async function submitEditLog(projectId, sheetType, rowId, timestamp, textInputId, durInputId) {
           const newContent = document.getElementById(textInputId).value.trim();
           const newDuration = parseFloat(document.getElementById(durInputId).value) || 0;
           if (!newContent) return showToast("內容不能為空", "error");
@@ -1369,7 +1398,7 @@
           } catch(e) { showToast("更新失敗：" + e.toString(), "error"); }
       }
 
-      function confirmDeleteLog(projectId, rowId, sheetType, timestamp) {
+      function confirmDeleteLog(projectId, sheetType, rowId, timestamp) {
           if(!confirm("確定要刪除這筆日誌嗎？此動作無法復原。")) return;
           showToast("正在刪除...", "info");
           apiClient.call('deleteLog', { projectId, rowId, sheetType, timestamp }).then(async () => {
@@ -1377,7 +1406,7 @@
           }).catch(e => showToast("刪除失敗：" + e.toString(), "error"));
       }
 
-      function confirmDeleteTask(projectId, rowId, sheetType, nodeName, taskName) {
+      function confirmDeleteTask(projectId, sheetType, rowId, nodeName, taskName) {
           if(!confirm(`確定要刪除任務「${taskName}」嗎？\n刪除後會從列表中消失，但歷史紀錄仍會保留。`)) return;
           showToast("正在刪除任務...", "info");
           apiClient.call('deleteTask', { projectId, rowId, sheetType, nodeName, taskName }).then(async () => {
@@ -1385,13 +1414,13 @@
           }).catch(e => showToast("刪除失敗：" + e.toString(), "error"));
       }
 
-      function toggleTaskCompletion(projectId, rowId, sheetType, taskName, currentStatus) {
+      function toggleTaskCompletion(projectId, sheetType, rowId, taskName, currentStatus) {
           const newStatus = !currentStatus;
           const oldState = JSON.parse(JSON.stringify(StateStore.get('projectsList')));
           performOptimisticUpdate(
             () => {
                 const projList = StateStore.get('projectsList');
-                const targetProj = projList.find(p => p.projectId === projectId);
+                const targetProj = projList.find(p => p.sheetType === sheetType && p._rowId === rowId);
                 if (targetProj) {
                     if (!targetProj.taskStatus) targetProj.taskStatus = {};
                     if (newStatus) targetProj.taskStatus[taskName] = true; else delete targetProj.taskStatus[taskName];
@@ -1403,18 +1432,18 @@
           );
       }
 
-      async function submitEditTaskDate(projectId, nodeName, taskName, inputId) {
+      async function submitEditTaskDate(projectId, sheetType, rowId, serviceItem, nodeName, taskName, inputId) {
           const newDate = document.getElementById(inputId).value;
           if (!newDate) { showToast("請選擇一個日期", "error"); return; }
           showToast("正在更新排程...", "info"); 
           try {
-              await apiClient.call('updateTaskSchedule', { projectId, nodeName, taskName, newDate });
+              await apiClient.call('updateTaskSchedule', { projectId, sheetType, rowId, serviceItem, nodeName, taskName, newDate });
               showToast("排程日期更新成功！", "info");
               const freshData = await apiClient.call('getInitialData'); StateStore.setInitialData(freshData); renderFishboneDiagram();
           } catch(e) { showToast("更新失敗：" + e.toString(), "error"); }
       }
 
-      function submitTaskLog(projectId, rowId, sheetType, nodeName, taskName, textInputId, durInputId) {
+      function submitTaskLog(projectId, sheetType, rowId, serviceItem, nodeName, taskName, textInputId, durInputId) {
         const logContent = document.getElementById(textInputId).value.trim();
         const duration = parseFloat(document.getElementById(durInputId).value);
         if (!logContent || isNaN(duration)) return showToast("請填寫日誌並確保工時正確", "error");
@@ -1425,7 +1454,7 @@
         performOptimisticUpdate(
           () => { 
             const projList = StateStore.get('projectsList');
-            const targetProj = projList.find(p => p.projectId === projectId);
+            const targetProj = projList.find(p => p.sheetType === sheetType && p._rowId === rowId);
             if(targetProj) {
                 if(!targetProj.workLog) targetProj.workLog = [];
                 targetProj.workLog.push(newLog);
@@ -1500,10 +1529,13 @@
       }
 
       async function handleEmailSubmit() {
-        const activeProjId = StateStore.get('activeProjectId');
-        if (!activeProjId) return showToast("請先從頂部選擇專案", "error");
+        const activeProjectKey = StateStore.get('activeProjectKey');
+        if (!activeProjectKey) return showToast("請先從頂部選擇專案", "error");
+        
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === parseInt(rowIdStr, 10));
+        if (!project) return;
 
-        const project = StateStore.get('projectsList').find(p => p.projectId === activeProjId);
         const toEmail = document.getElementById('email-to').value.trim();
         const subject = document.getElementById('email-subject').value.trim();
         const body = document.getElementById('email-body').value.trim();
@@ -1521,7 +1553,7 @@
               const base64Str = await readFileAsBase64(file);
               attachmentsList.push({ fileName: file.name, mimeType: file.type, base64Data: base64Str.split(',')[1] });
            }
-           const payload = { projectId: activeProjId, clientName: project.clientName, subject, toEmail, body, attachmentsList };
+           const payload = { projectId: project.projectId, clientName: project.clientName, subject, toEmail, body, attachmentsList };
            
            const histContainer = document.getElementById('email-history-container');
            if (histContainer.innerHTML.includes("暫無新增紀錄")) histContainer.innerHTML = '';
@@ -1553,7 +1585,13 @@
       }
 
       async function submitCustomNode() {
-        const activeProjId = StateStore.get('activeProjectId');
+        const activeProjectKey = StateStore.get('activeProjectKey');
+        if (!activeProjectKey) return showToast("請先從頂部選擇專案", "error");
+        
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === parseInt(rowIdStr, 10));
+        if (!project) return;
+
         const nodeName = document.getElementById('custom-node-name').value.trim();
         const taskName = document.getElementById('custom-task-name').value.trim();
         const date = document.getElementById('custom-node-date').value;
@@ -1564,7 +1602,13 @@
         btn.disabled = true; btn.innerHTML = `<i data-lucide="loader" style="width:16px;height:16px; animation: spin 1s linear infinite;"></i> 寫入中...`; lucide.createIcons();
 
         try {
-          const payload = { projectId: activeProjId, nodeName, taskName, date, duration };
+          const payload = { 
+              projectId: project.projectId, 
+              sheetType: project.sheetType, 
+              rowId: project._rowId, 
+              serviceItem: project.serviceItem, 
+              nodeName, taskName, date, duration 
+          };
           const result = await apiClient.call('addCustomNode', payload);
           showToast(result.message || "任務已新增成功！", "info");
           document.getElementById('inline-add-node-form').style.display = 'none';
@@ -1585,7 +1629,7 @@
 
         EventHub.on("stateLoadedFromCache", () => { filterAndRenderProjects(); renderFishboneDiagram(); renderEmailView(); });
         EventHub.on("initialDataLoaded", () => { filterAndRenderProjects(); renderFishboneDiagram(); renderEmailView(); });
-        EventHub.on("stateUpdated:activeProjectId", () => { renderFishboneDiagram(); });
+        EventHub.on("stateUpdated:activeProjectKey", () => { renderFishboneDiagram(); });
 
         StateStore.loadFromLocalStorage();
 

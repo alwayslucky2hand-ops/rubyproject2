@@ -221,6 +221,9 @@
              <button id="btn-auto-schedule" class="btn-primary" onclick="handleAutoScheduleClick()">
                 <i data-lucide="calendar-plus" style="width:16px;height:16px;"></i> 自動排程
              </button>
+             <button id="btn-next-month-schedule" class="btn-primary" style="background:#ea580c; color:#fff;" onclick="handleNextMonthScheduleClick()">
+                <i data-lucide="calendar-range" style="width:16px;height:16px;"></i> 產生次月排程
+             </button>
              <button id="btn-refresh-schedule" class="btn-secondary" onclick="handleRefreshScheduleClick()">
                 <i data-lucide="refresh-cw" style="width:16px; height:16px;"></i> 刷新未來排程
              </button>
@@ -366,7 +369,7 @@
 
       const apiClient = {
         call: async function(action, payload = {}) {
-          const mutativeActions = ['executeAutoSchedule', 'updateSubTaskLog', 'addCustomNode', 'sendEmailWithAttachments', 'updateTaskSchedule', 'toggleTaskStatus', 'deleteTask', 'editLog', 'deleteLog', 'updateTaskOrder', 'batchUpdateTaskSchedule', 'refreshSchedule', 'clearFutureSchedule', 'createProjectFromQuote', 'deleteProjectFromSheet'];
+          const mutativeActions = ['executeAutoSchedule', 'scheduleNextMonth', 'updateSubTaskLog', 'addCustomNode', 'sendEmailWithAttachments', 'updateTaskSchedule', 'toggleTaskStatus', 'deleteTask', 'editLog', 'deleteLog', 'updateTaskOrder', 'batchUpdateTaskSchedule', 'refreshSchedule', 'clearFutureSchedule', 'createProjectFromQuote', 'deleteProjectFromSheet'];
           if (!navigator.onLine && mutativeActions.includes(action)) {
             OfflineQueueManager.enqueue(action, payload);
             return { message: "已轉入離線佇列，連線後將自動同步" };
@@ -536,6 +539,11 @@
           const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === rowId);
           
           if(project) {
+              const btnNextMonth = document.getElementById("btn-next-month-schedule");
+              if (btnNextMonth) {
+                  btnNextMonth.style.display = project.sheetType === "專案-訂閱服務" ? "inline-flex" : "none";
+              }
+
               infoDiv.innerHTML = `
                   <div style="font-size:14px; display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
                       <span class="badge-mono" style="font-size:14px;">${project.projectId}</span>
@@ -553,6 +561,9 @@
          if(!url) return "";
          if(url.includes("docs.google.com") && url.includes("/edit")) {
              return url.replace(/\/edit.*/, "/preview");
+         }
+         if(url.includes("drive.google.com") && url.includes("/view")) {
+             return url.replace(/\/view.*/, "/preview");
          }
          return url;
       }
@@ -636,6 +647,44 @@
           setTimeout(() => {
             btn.disabled = false; 
             btn.innerHTML = `<i data-lucide="calendar-plus" style="width:16px; height:16px;"></i> 自動排程`; 
+            lucide.createIcons();
+          }, 2000);
+        }
+      }
+
+      async function handleNextMonthScheduleClick() {
+        const activeProjectKey = StateStore.get("activeProjectKey");
+        const startDate = document.getElementById("start-date-input").value;
+        const btn = document.getElementById("btn-next-month-schedule");
+
+        if (!activeProjectKey || !startDate) { showToast("請先選擇專案並填寫次月預計啟動日期！", "error"); return; }
+        
+        const [sheetType, rowIdStr] = activeProjectKey.split('_');
+        const project = StateStore.get("projectsList").find(p => p.sheetType === sheetType && p._rowId === parseInt(rowIdStr, 10));
+        if (!project || project.sheetType !== "專案-訂閱服務") return;
+
+        btn.disabled = true; 
+        btn.innerHTML = `<i data-lucide="loader" style="width:16px; height:16px; animation: spin 1s linear infinite;"></i> 處理中...`; 
+        lucide.createIcons();
+
+        try {
+          const result = await apiClient.call('scheduleNextMonth', { 
+              projectId: project.projectId, 
+              sheetType: project.sheetType, 
+              rowId: project._rowId, 
+              serviceItem: project.serviceItem, 
+              startDate: startDate 
+          });
+          btn.innerHTML = `<i data-lucide="check" style="width:16px; height:16px;"></i> 產生成功`; 
+          lucide.createIcons();
+          showToast(result.message || "次月排程成功！", "info");
+          const freshData = await apiClient.call('getInitialData'); StateStore.setInitialData(freshData);
+        } catch (err) { 
+          showToast("排程失敗：" + err.toString(), "error");
+        } finally { 
+          setTimeout(() => {
+            btn.disabled = false; 
+            btn.innerHTML = `<i data-lucide="calendar-range" style="width:16px; height:16px;"></i> 產生次月排程`; 
             lucide.createIcons();
           }, 2000);
         }
